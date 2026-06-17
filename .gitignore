@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+backend/uploads/
+frontend/.next/
+frontend/node_modules/
+.env
+*.mp4
+*.mov
+*.avi
