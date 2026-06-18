@@ -351,22 +351,22 @@ def compare_videos(original_path: str, edited_path: str) -> Dict:
     edit_vig = _average_dicts([analyze_vignette(f) for _, f in edit_frames])
 
     ref = {
-        "mean": orig_lum["mean"],
-        "std": orig_lum["std"],
-        "mean_luminance": orig_lum["mean"],
-        "luminance_std": orig_lum["std"],
-        "p25": orig_lum.get("p25", 64),
-        "p75": orig_lum.get("p75", 192),
-        "p01": orig_lum.get("p01", 0),
-        "p99": orig_lum.get("p99", 255),
-        "top_10pct_mean": orig_lum.get("top_10pct_mean", 255),
-        "bottom_10pct_mean": orig_lum.get("bottom_10pct_mean", 0),
-        "min": orig_lum.get("min", 0),
+        "mean": lum["mean"],
+        "std": lum["std"],
+        "mean_luminance": lum["mean"],
+        "luminance_std": lum["std"],
+        "p25": lum.get("p25", 64),
+        "p75": lum.get("p75", 192),
+        "p01": lum.get("p01", 0),
+        "p99": lum.get("p99", 255),
+        "top_10pct_mean": lum.get("top_10pct_mean", 255),
+        "bottom_10pct_mean": lum.get("bottom_10pct_mean", 0),
+        "min": lum.get("min", 0),
     }
 
     hist_params = estimate_histogram_parameters(ref, edit_lum)
     color_params = estimate_color_parameters(
-        {"g_r_ratio_deviation": orig_col.get("g_r_ratio_deviation", 0.0)},
+        {"g_r_ratio_deviation": col.get("g_r_ratio_deviation", 0.0)},
         edit_col,
     )
     sat_params = estimate_saturation_parameters(
