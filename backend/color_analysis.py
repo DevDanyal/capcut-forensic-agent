@@ -92,6 +92,7 @@ def analyze_saturation(frame: np.ndarray) -> Dict:
     sat_hist, _ = np.histogram(sat, bins=256, range=(0, 255))
     sat_hist = sat_hist.astype(float) / sat_hist.sum()
     low_sat_energy = float(np.sum(sat_hist[:64]))
+    mid_sat_energy = float(np.sum(sat_hist[64:192]))
     high_sat_energy = float(np.sum(sat_hist[192:]))
 
     hue = hsv[:,:,0].astype(float)
@@ -101,6 +102,7 @@ def analyze_saturation(frame: np.ndarray) -> Dict:
         "mean_saturation": mean_sat / 255.0,
         "std_saturation": std_sat / 255.0,
         "low_sat_energy": low_sat_energy,
+        "mid_sat_energy": mid_sat_energy,
         "high_sat_energy": high_sat_energy,
         "hue_std": hue_std,
     }
@@ -267,6 +269,12 @@ def estimate_saturation_parameters(ref_sat: Dict, cur_sat: Dict) -> Dict:
         vibrance = (1.0 - low_sat_ratio) * 120
     elif high_sat_ratio > 1.5 and sat_ratio > 1.1:
         vibrance = (high_sat_ratio - 1.0) * -60
+    else:
+        mid_ratio = cur_sat.get("mid_sat_energy", 0.5) / (ref_sat.get("mid_sat_energy", 0.3) + 1e-8)
+        if mid_ratio > 1.1:
+            vibrance = (mid_ratio - 1.0) * 80
+        elif sat_ratio > 1.03:
+            vibrance = (sat_ratio - 1.0) * 60
     if vibrance > 0:
         params["vibrance"] = max(0, min(100, vibrance))
 

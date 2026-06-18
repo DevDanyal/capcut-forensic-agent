@@ -158,7 +158,7 @@ class DetectionEngine:
             avg_color,
         )
         sat_params = estimate_saturation_parameters(
-            {"mean_saturation": ref["mean_saturation"], "low_sat_energy": 0.5, "high_sat_energy": 0.05},
+            {"mean_saturation": ref["mean_saturation"], "low_sat_energy": 0.5, "mid_sat_energy": 0.5, "high_sat_energy": 0.05},
             avg_sat,
         )
 
@@ -308,23 +308,29 @@ def _compensate_interactions(adj: Dict[str, float]) -> Dict[str, float]:
 
     # Contrast stretches histogram → pulls mean toward midpoint.
     # If contrast > 0, some of the measured mean shift is from contrast, not brightness.
+    # Compensate: reduce brightness by ~contrast * 0.15
     if abs(c) > 5 and abs(b) > 5:
         out["brightness"] = b - c * 0.15
 
+    # Highlights boost also lifts the mean → reduce brightness slightly
     if h > 5:
         out["brightness"] = out.get("brightness", b) - h * 0.10
 
+    # Shadows lift also lifts the mean → reduce brightness slightly
     if s > 5:
         out["brightness"] = out.get("brightness", b) - s * 0.08
 
+    # Brightness change affects contrast stats (brighter → lower relative std)
     if abs(b) > 5:
         out["contrast"] = c + b * 0.08
 
+    # Temperature affects r/b ratio which influences tint detection
     t_val = out.get("temperature", 0)
     if abs(t_val) > 5:
         tint_from_temp = t_val * 0.12
         out["tint"] = max(-100, min(100, out.get("tint", 0) - tint_from_temp))
 
+    # Clamp all values
     for k in out:
         if k == "exposure":
             out[k] = max(-5, min(5, out[k]))

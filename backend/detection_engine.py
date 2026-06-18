@@ -158,7 +158,7 @@ class DetectionEngine:
             avg_color,
         )
         sat_params = estimate_saturation_parameters(
-            {"mean_saturation": ref["mean_saturation"], "low_sat_energy": 0.5, "high_sat_energy": 0.05},
+            {"mean_saturation": ref["mean_saturation"], "low_sat_energy": 0.5, "mid_sat_energy": 0.5, "high_sat_energy": 0.05},
             avg_sat,
         )
 

@@ -92,7 +92,7 @@ def classify_filters(
     style_filters = _detect_style_filters(params, color_matrix, saturation, luminance_stats, edge_analysis, noise_analysis)
     detected_filters.extend(style_filters)
 
-    if params.get("grain", 0) > 15:
+    if params.get("grain", 0) > 8:
         detected_filters.append({
             "name": "Grain",
             "type": "effect",
@@ -146,7 +146,16 @@ def _detect_style_filters(params: Dict, color_matrix: Dict, saturation: Dict, lu
     skin_ratio = color_matrix.get("skin_ratio", 0)
     skin_tone = color_matrix.get("skin_tone_isolation", 0)
 
-    if r_b > 1.3 and r_g > 1.1 and skin_ratio > 0.05 and color_matrix.get("diff_bg", 0) < -10:
+    teal_orange = False
+    teal_confidence = 0
+    if r_b > 1.25 and r_g > 1.1 and color_matrix.get("diff_bg", 0) < -8:
+        if skin_ratio > 0.05:
+            teal_orange = True
+            teal_confidence = 65
+        elif abs(skin_tone) < 5:
+            teal_orange = True
+            teal_confidence = 50
+    if teal_orange:
         detected.append({
             "name": "Teal & Orange",
             "type": "filter",
@@ -154,7 +163,7 @@ def _detect_style_filters(params: Dict, color_matrix: Dict, saturation: Dict, lu
                 "intensity": round(min(100, (r_b - 1.0) * 80), 0),
                 "teal_shadows": round(abs(color_matrix.get("diff_bg", 0)) / 2, 0),
             },
-            "confidence": 60,
+            "confidence": teal_confidence,
         })
 
     if luminance_stats.get("std", 74) > 100 and contrast > 40 and sat < -5:
