@@ -162,7 +162,7 @@ class DetectionEngine:
             avg_sat,
         )
 
-        adjustments = {
+        adjustments_raw = {
             "brightness": hist_params.get("brightness", 0),
             "contrast": hist_params.get("contrast", 0),
             "saturation": sat_params.get("saturation", 0),
@@ -176,6 +176,7 @@ class DetectionEngine:
             "vibrance": round(sat_params.get("vibrance", 0), 0),
             "sharpness": round(_map_from_ratio(avg_edge["laplacian_variance"] / ref["laplacian_variance"], 0.3, 3.0, -100, 100), 0),
         }
+        adjustments = _compensate_interactions(adjustments_raw)
         analysis["adjustments"] = adjustments
 
         ref_for_classifier = {**ref, "p25": 64, "p75": 192, "p01": 0, "p99": 255,
@@ -296,3 +297,48 @@ def _map_from_ratio(ratio: float, in_min: float, in_max: float, out_min: float, 
     t = (ratio - in_min) / (in_max - in_min + 1e-8)
     result = out_min + t * (out_max - out_min)
     return max(out_min, min(out_max, result))
+
+def _compensate_interactions(adj: Dict[str, float]) -> Dict[str, float]:
+    out = dict(adj)
+
+    c = out.get("contrast", 0)
+    h = out.get("highlights", 0)
+    s = out.get("shadows", 0)
+    b = out.get("brightness", 0)
+
+    # Contrast stretches histogram → pulls mean toward midpoint.
+    # If contrast > 0, some of the measured mean shift is from contrast, not brightness.
+    # Compensate: reduce brightness by ~contrast * 0.15
+    if abs(c) > 5 and abs(b) > 5:
+        out["brightness"] = b - c * 0.15
+
+    # Highlights boost also lifts the mean → reduce brightness slightly
+    if h > 5:
+        out["brightness"] = out.get("brightness", b) - h * 0.10
+
+    # Shadows lift also lifts the mean → reduce brightness slightly
+    if s > 5:
+        out["brightness"] = out.get("brightness", b) - s * 0.08
+
+    # Brightness change affects contrast stats (brighter → lower relative std)
+    if abs(b) > 5:
+        out["contrast"] = c + b * 0.08
+
+    # Temperature affects r/b ratio which influences tint detection
+    t_val = out.get("temperature", 0)
+    if abs(t_val) > 5:
+        tint_from_temp = t_val * 0.12
+        out["tint"] = max(-100, min(100, out.get("tint", 0) - tint_from_temp))
+
+    # Clamp all values
+    for k in out:
+        if k == "exposure":
+            out[k] = max(-5, min(5, out[k]))
+        elif k == "vibrance":
+            out[k] = max(-50, min(50, out[k]))
+        elif k == "sharpness":
+            out[k] = max(0, min(100, out[k]))
+        else:
+            out[k] = max(-100, min(100, out[k]))
+
+    return out
