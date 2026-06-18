@@ -6,6 +6,8 @@ import UploadZone from "@/components/UploadZone";
 import CompareUpload from "@/components/CompareUpload";
 import LoadingScreen from "@/components/LoadingScreen";
 import ResultsDashboard from "@/components/ResultsDashboard";
+import AdjustmentsPanel from "@/components/AdjustmentsPanel";
+import FilterGrid from "@/components/FilterGrid";
 
 export default function Home() {
   const [mode, setMode] = useState<"single" | "compare">("single");
@@ -210,6 +212,4 @@ function CompareDashboard({ result, onReset }: { result: CompareResult; onReset:
   );
 }
 
-// Lazy imports to avoid circular deps
-import AdjustmentsPanel from "@/components/AdjustmentsPanel";
-import FilterGrid from "@/components/FilterGrid";
+
