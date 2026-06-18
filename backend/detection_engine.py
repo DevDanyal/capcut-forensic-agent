@@ -298,7 +298,7 @@ def _map_from_ratio(ratio: float, in_min: float, in_max: float, out_min: float, 
     result = out_min + t * (out_max - out_min)
     return max(out_min, min(out_max, result))
 
-def _load_sample_frames(video_path: str, max_frames: int = 60) -> Tuple[List[Tuple[float, np.ndarray]], float, int, int]:
+def _load_sample_frames(video_path: str, max_frames: int = 30) -> Tuple[List[Tuple[float, np.ndarray]], float, int, int]:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Could not open video: {video_path}")
@@ -306,18 +306,21 @@ def _load_sample_frames(video_path: str, max_frames: int = 60) -> Tuple[List[Tup
     if fps <= 0 or fps > 1000:
         fps = 30.0
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = total / fps if total > 0 else 0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    indices = [int(i * total / max_frames) for i in range(max_frames)]
-    indices = [i for i in indices if i < total]
+    step = max(1, total // max_frames)
     frames = []
-    for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    idx = 0
+    while True:
         ret, frame = cap.read()
-        if ret:
+        if not ret:
+            break
+        if idx % step == 0:
             frames.append((idx / fps, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+            if len(frames) >= max_frames:
+                break
+        idx += 1
     cap.release()
     return frames, fps, width, height
 
