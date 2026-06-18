@@ -222,28 +222,32 @@ def analyze_video_url():
             os.remove(filepath)
         return jsonify({"error": str(e)}), 500
 
+@app.errorhandler(500)
+def handle_500(e):
+    return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+@app.errorhandler(Exception)
+def handle_all(e):
+    return jsonify({"error": str(e)}), 500
+
 @app.route('/api/compare', methods=['POST'])
 def compare_videos_endpoint():
-    if 'original' not in request.files or 'edited' not in request.files:
-        return jsonify({"error": "Both 'original' and 'edited' video files required"}), 400
-
-    orig_file = request.files['original']
-    edit_file = request.files['edited']
-
-    if orig_file.filename == '' or edit_file.filename == '':
-        return jsonify({"error": "Both files must be selected"}), 400
-
-    for f in [orig_file, edit_file]:
-        if not allowed_file(f.filename):
-            return jsonify({"error": f"File type not supported for {f.filename}. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
-
-    uid = str(uuid.uuid4())
-    orig_path = os.path.join(UPLOAD_FOLDER, f"{uid}_orig_{secure_filename(orig_file.filename)}")
-    edit_path = os.path.join(UPLOAD_FOLDER, f"{uid}_edit_{secure_filename(edit_file.filename)}")
-    orig_file.save(orig_path)
-    edit_file.save(edit_path)
-
+    orig_path = edit_path = None
     try:
+        if 'original' not in request.files or 'edited' not in request.files:
+            return jsonify({"error": "Both original and edited video files required"}), 400
+        orig_file = request.files['original']
+        edit_file = request.files['edited']
+        if orig_file.filename == '' or edit_file.filename == '':
+            return jsonify({"error": "Both files must be selected"}), 400
+        for f in [orig_file, edit_file]:
+            if not allowed_file(f.filename):
+                return jsonify({"error": f"File type not supported for {f.filename}"}), 400
+        uid = str(uuid.uuid4())
+        orig_path = os.path.join(UPLOAD_FOLDER, f"{uid}_orig_{secure_filename(orig_file.filename)}")
+        edit_path = os.path.join(UPLOAD_FOLDER, f"{uid}_edit_{secure_filename(edit_file.filename)}")
+        orig_file.save(orig_path)
+        edit_file.save(edit_path)
         from detection_engine import compare_videos
         result = compare_videos(orig_path, edit_path)
         result["status"] = "success"
@@ -252,7 +256,7 @@ def compare_videos_endpoint():
         return jsonify({"error": str(e)}), 500
     finally:
         for p in [orig_path, edit_path]:
-            if os.path.exists(p):
+            if p and os.path.exists(p):
                 os.remove(p)
 
 @app.route('/api/health', methods=['GET'])
