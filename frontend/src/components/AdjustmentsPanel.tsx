@@ -74,8 +74,14 @@ export default function AdjustmentsPanel({ adjustments }: Props) {
         </span>
       </div>
 
+      {/* Apply order hint */}
+      <div className="px-5 pt-4 pb-0">
+        <p className="text-[0.6rem] text-[var(--color-text-tertiary)] leading-relaxed">
+          Apply in CapCut in this order: Exposure &rarr; Contrast &rarr; Highlights/Shadows &rarr; Whites/Blacks &rarr; Brightness &rarr; Saturation/Vibrance &rarr; Temperature/Tint &rarr; Sharpness
+        </p>
+      </div>
       {/* Rings */}
-      <div className="px-5 py-6">
+      <div className="px-5 py-4">
         <div className="grid grid-cols-[repeat(auto-fill,minmax(90px,1fr))] gap-y-6 gap-x-2 justify-items-center">
           {entries.map(([name, value], i) => {
             const capcutVal = toCapcut(name, value);
