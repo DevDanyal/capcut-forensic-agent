@@ -8,12 +8,12 @@ import yt_dlp
 import threading
 import concurrent.futures
 from urllib.parse import urlparse
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from detection_engine import DetectionEngine
 
-app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), '..', 'frontend'))
+app = Flask(__name__)
 CORS(app)
 
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
@@ -26,14 +26,6 @@ app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-@app.route('/')
-def index():
-    return send_from_directory(app.static_folder, 'index.html')
-
-@app.route('/<path:path>')
-def static_files(path):
-    return send_from_directory(app.static_folder, path)
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_video():
