@@ -328,6 +328,10 @@ def compare_videos(original_path: str, edited_path: str) -> Dict:
     orig_frames, orig_fps, orig_w, orig_h = _load_sample_frames(original_path)
     edit_frames, edit_fps, edit_w, edit_h = _load_sample_frames(edited_path)
 
+    if len(orig_frames) == 0 or len(edit_frames) == 0:
+        missing = "original" if len(orig_frames) == 0 else "edited"
+        raise ValueError(f"Could not extract any frames from the {missing} video. Unsupported codec or corrupted file.")
+
     min_len = min(len(orig_frames), len(edit_frames))
     orig_frames = orig_frames[:min_len]
     edit_frames = edit_frames[:min_len]
