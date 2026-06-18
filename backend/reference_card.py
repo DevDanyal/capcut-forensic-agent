@@ -295,10 +295,10 @@ FILTER_NAMES_MAP = {
 def get_neutral_reference():
     return {
         "mean_luminance": 128.0,
-        "luminance_std": 74.0,
+        "luminance_std": 65.0,
         "mean_saturation": 0.2,
         "r_b_ratio": 1.0,
         "g_channel_offset": 0.0,
-        "laplacian_variance": 100.0,
+        "laplacian_variance": 120.0,
         "noise_std": 0.005,
     }

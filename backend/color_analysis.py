@@ -210,22 +210,22 @@ def estimate_histogram_parameters(ref_stats: Dict, cur_stats: Dict) -> Dict:
 
     params = {}
     mean_diff = cur_stats["mean"] - ref_stats["mean"]
-    params["brightness"] = lerp(mean_diff, (-128, 128), (-100, 100))
+    params["brightness"] = lerp(mean_diff, (-70, 70), (-100, 100))
 
     std_ratio = cur_stats["std"] / (ref_stats["std"] + 1e-8)
-    params["contrast"] = lerp(std_ratio, (0.3, 2.5), (-100, 100))
+    params["contrast"] = lerp(std_ratio, (0.2, 3.0), (-100, 100))
 
     shadows_diff = cur_stats["p25"] - ref_stats.get("p25", 64)
-    params["shadows"] = lerp(shadows_diff, (-64, 64), (-100, 100))
+    params["shadows"] = lerp(shadows_diff, (-45, 45), (-100, 100))
 
     highlights_diff = cur_stats["p75"] - ref_stats.get("p75", 192)
-    params["highlights"] = lerp(highlights_diff, (-64, 64), (-100, 100))
+    params["highlights"] = lerp(highlights_diff, (-45, 45), (-100, 100))
 
     whites_diff = cur_stats.get("p99", 255) - ref_stats.get("p99", 255)
-    params["whites"] = lerp(whites_diff, (-30, 30), (-100, 100))
+    params["whites"] = lerp(whites_diff, (-25, 25), (-100, 100))
 
     blacks_diff = cur_stats.get("p01", 0) - ref_stats.get("p01", 0)
-    params["blacks"] = lerp(blacks_diff, (-30, 30), (-100, 100))
+    params["blacks"] = lerp(blacks_diff, (-25, 25), (-100, 100))
 
     top_pct = cur_stats.get("top_10pct_mean", 255)
     ref_top = ref_stats.get("top_10pct_mean", 255)
@@ -245,11 +245,11 @@ def estimate_color_parameters(ref_matrix: Dict, cur_matrix: Dict) -> Dict:
 
     r_b_ratio_cur = cur_matrix["r_b_ratio"]
     r_b_ratio_ref = 1.0
-    temp_shift = (r_b_ratio_cur - r_b_ratio_ref) * 50
+    temp_shift = (r_b_ratio_cur - r_b_ratio_ref) * 100
     params["temperature"] = max(-100, min(100, temp_shift))
 
     g_r_dev = cur_matrix["g_r_ratio_deviation"] - (ref_matrix.get("g_r_ratio_deviation", 0.0))
-    tint_shift = g_r_dev * 100
+    tint_shift = g_r_dev * 150
     params["tint"] = max(-100, min(100, tint_shift))
 
     return params
@@ -257,12 +257,17 @@ def estimate_color_parameters(ref_matrix: Dict, cur_matrix: Dict) -> Dict:
 def estimate_saturation_parameters(ref_sat: Dict, cur_sat: Dict) -> Dict:
     params = {}
     sat_ratio = cur_sat["mean_saturation"] / (ref_sat.get("mean_saturation", 0.2) + 1e-8)
-    params["saturation"] = max(-100, min(100, (sat_ratio - 1.0) * 100))
+    params["saturation"] = max(-100, min(100, (sat_ratio - 1.0) * 80))
 
     low_sat_ratio = cur_sat["low_sat_energy"] / (ref_sat.get("low_sat_energy", 0.5) + 1e-8)
     high_sat_ratio = cur_sat["high_sat_energy"] / (ref_sat.get("high_sat_energy", 0.05) + 1e-8)
 
-    if low_sat_ratio < 0.8 and sat_ratio > 1.1:
-        params["vibrance"] = max(0, min(100, (1.0 - low_sat_ratio) * 100))
+    vibrance = 0.0
+    if low_sat_ratio < 0.85 and sat_ratio > 1.05:
+        vibrance = (1.0 - low_sat_ratio) * 120
+    elif high_sat_ratio > 1.5 and sat_ratio > 1.1:
+        vibrance = (high_sat_ratio - 1.0) * -60
+    if vibrance > 0:
+        params["vibrance"] = max(0, min(100, vibrance))
 
     return params
