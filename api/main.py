@@ -1,10 +1,7 @@
 import os
-import sys
-import re
 import uuid
 import cv2
 import base64
-import json
 import requests
 import numpy as np
 import yt_dlp
@@ -19,8 +16,7 @@ from detection_engine import DetectionEngine
 app = Flask(__name__)
 CORS(app)
 
-IS_VERCEL = os.environ.get('VERCEL', '0') == '1'
-UPLOAD_FOLDER = '/tmp/uploads' if IS_VERCEL else os.path.join(os.path.dirname(__file__), 'uploads')
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
 ALLOWED_EXTENSIONS = {'mp4', 'mov', 'avi', 'mkv', 'webm', 'wmv', 'flv', 'm4v'}
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -89,14 +85,13 @@ PLATFORM_DOMAINS = {
     'liveleak.com', 'rumble.com', 'streamable.com', 'vid.me',
 }
 
-def _try_ydl(video_url: str, filepath: str, opts_extra: dict) -> tuple:
+def _try_ydl(video_url: str, filepath: str, opts_extra: dict) -> bool:
     base = {
-        'format': 'best[ext=mp4]/worst',
+        'format': 'best[ext=mp4]/best[height<=1080]/worst',
         'quiet': True, 'no_warnings': True,
         'outtmpl': filepath,
-        'max_filesize': 500 * 1024 * 1024, 'socket_timeout': 30,
-        'retries': 3, 'geo_bypass': True,
-        'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
+        'max_filesize': 500 * 1024 * 1024, 'socket_timeout': 15,
+        'retries': 2, 'geo_bypass': True,
     }
     base.update(opts_extra)
     os.remove(filepath) if os.path.exists(filepath) else None
@@ -108,37 +103,21 @@ def _try_ydl(video_url: str, filepath: str, opts_extra: dict) -> tuple:
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         fut = pool.submit(_run)
         try:
-            fut.result(timeout=180)
-            ok = os.path.exists(filepath) and os.path.getsize(filepath) >= 1000
-            return (ok, "" if ok else "Downloaded file is too small or invalid")
-        except concurrent.futures.TimeoutError:
-            return (False, "Download timed out after 180 seconds")
-        except Exception as e:
-            msg = str(e)
-            if not msg:
-                msg = getattr(e, 'msg', 'Unknown yt-dlp error')
-            return (False, msg)
+            fut.result(timeout=120)
+            return os.path.exists(filepath) and os.path.getsize(filepath) >= 1000
+        except Exception:
+            return False
 
 def _ydl_strategies():
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-    yt_web = {'extractor_args': {'youtube': {'player_client': ['web']}}}
-    yt_android = {'extractor_args': {'youtube': {'player_client': ['android']}}}
-    yt_mweb = {'extractor_args': {'youtube': {'player_client': ['mweb', 'web']}}}
-    yt_skip = {'extractor_args': {'youtube': {'player_skip': ['webpage', 'configs']}}}
-    return [
-        yt_web,
-        {**yt_web, 'format': 'worst'},
-        yt_android,
-        {**yt_android, 'format': 'worst'},
-        yt_mweb,
-        {**yt_mweb, 'format': 'worst'},
-        yt_skip,
-        {**yt_skip, 'format': 'worst'},
-        {'format': 'worst'},
-        {'format': 'best[ext=mp4]'},
-        {'http_headers': {'User-Agent': ua}, 'format': 'worst'},
-        {'ignore_no_formats_error': True, 'format': 'worst'},
-    ]
+    s = [{}, {'extractor_args': {'tiktok': {'app_api': ['1']}}}]
+    s.append({'extractor_args': {'tiktok': {'app_api': ['1'], 'api_hostname': ['api16-normal-c-useast1a.tiktokv.com']}}})
+    for browser in ['chrome', 'brave', 'edge', 'opera', 'firefox']:
+        try:
+            s.append({'cookiesfrombrowser': (browser,)})
+            s.append({'cookiesfrombrowser': (browser,), 'extractor_args': {'tiktok': {'app_api': ['1']}}})
+        except Exception:
+            pass
+    return s
 
 def _run_analysis(filepath: str):
     engine = DetectionEngine(filepath, sample_interval=0.5, max_frames=300)
@@ -157,103 +136,6 @@ def _run_analysis(filepath: str):
 
     os.remove(filepath)
     return jsonify({"analysis": analysis, "frames": frames_b64, "status": "success"})
-
-def _extract_youtube_id(url: str) -> str:
-    m = re.search(r'(?:v=|/v/|youtu\.be/|/embed/|/shorts/)([a-zA-Z0-9_-]{11})', url)
-    return m.group(1) if m else None
-
-def _try_youtube_direct(video_url: str, filepath: str) -> tuple:
-    video_id = _extract_youtube_id(video_url)
-    if not video_id:
-        return (False, "Could not extract YouTube video ID")
-
-    clients = [
-        ("ANDROID", "19.09.37", "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w"),
-        ("ANDROID", "19.08.35", "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"),
-        ("WEB", "2.20250101.00.00", "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"),
-        ("WEB", "2.20240101.00.00", "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"),
-        ("IOS", "19.09.37", "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w"),
-        ("IOS", "19.08.35", "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"),
-        ("TVHTML5_SIMPLY", "7.20250101", "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"),
-    ]
-
-    for client_name, client_ver, api_key in clients:
-        ctx = {"client": {"clientName": client_name, "clientVersion": client_ver, "hl": "en", "gl": "US"}}
-        if "ANDROID" in client_name or "IOS" in client_name:
-            ctx["client"]["androidSdkVersion"] = 31
-        if "TV" in client_name:
-            ctx["client"]["clientScreen"] = "WATCH"
-        payload = {"videoId": video_id, "context": ctx}
-
-        ua = {
-            "ANDROID": "com.google.android.youtube/19.09.37 (Linux; U; Android 14; en_US)",
-            "IOS": "com.google.ios.youtube/19.09.37 (iPhone; U; CPU iOS 17_0 like Mac OS X; en_US)",
-            "WEB": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            "TVHTML5_SIMPLY": "Mozilla/5.0 (ChromiumStylePlatform; Linux; en_US) AppleWebKit/537.36",
-        }.get(client_name, "Mozilla/5.0")
-
-        try:
-            resp = requests.post(
-                f"https://www.youtube.com/youtubei/v1/player?key={api_key}",
-                headers={"User-Agent": ua, "Content-Type": "application/json"},
-                json=payload, timeout=30,
-            )
-        except Exception:
-            continue
-
-        if resp.status_code != 200:
-            continue
-
-        data = resp.json()
-        playability = data.get("playabilityStatus", {})
-        if playability.get("status") != "OK":
-            continue
-
-        streaming_data = data.get("streamingData", {})
-        if not streaming_data:
-            continue
-
-        candidates = streaming_data.get("formats", []) + streaming_data.get("adaptiveFormats", [])
-        for fmt in candidates:
-            mime = fmt.get("mimeType", "")
-            if "mp4" not in mime and "webm" not in mime and "3gp" not in mime:
-                continue
-            direct_url = fmt.get("url")
-            if not direct_url:
-                cipher = fmt.get("signatureCipher") or fmt.get("cipher", "")
-                if cipher:
-                    from urllib.parse import parse_qs
-                    qs = parse_qs(cipher)
-                    direct_url = qs.get("url", [None])[0]
-                    sig = qs.get("s", [None])[0]
-                    sp = qs.get("sp", ["sig"])[0]
-                    if direct_url and sig:
-                        direct_url = f"{direct_url}&{sp}={sig}"
-            if not direct_url:
-                continue
-
-            os.remove(filepath) if os.path.exists(filepath) else None
-            try:
-                dl = requests.get(direct_url, stream=True, timeout=120,
-                    headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.youtube.com/"})
-            except Exception:
-                continue
-            if dl.status_code != 200:
-                continue
-
-            total = 0
-            with open(filepath, "wb") as f:
-                for chunk in dl.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        total += len(chunk)
-                        if total > 500 * 1024 * 1024:
-                            break
-
-            if total >= 1000:
-                return (True, "")
-
-    return (False, "No downloadable format found from YouTube")
 
 def _is_platform_url(url: str) -> bool:
     try:
@@ -285,51 +167,39 @@ def analyze_video_url():
         safe_filename = f"{unique_id}_from_url{ext}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], safe_filename)
 
+        # TikTok known-blocked: fast-fail with clear message
         domain = urlparse(video_url).netloc.lower()
         if any(d in domain for d in ('tiktok.com', 'vm.tiktok.com')):
             return jsonify({"error": "TikTok does not allow automated video downloads from this server. Please save the video and use the Upload File button instead."}), 400
 
+        # Known platform → yt-dlp first
         if _is_platform_url(video_url) or not is_direct_video:
-            last_error = ""
-            for strategy in _ydl_strategies():
-                ok, err = _try_ydl(video_url, filepath, strategy)
-                if ok:
-                    return _run_analysis(filepath)
-                if err:
-                    last_error = err
-            if "youtube" in video_url or "youtu.be" in video_url:
-                ok, err = _try_youtube_direct(video_url, filepath)
-                if ok:
-                    return _run_analysis(filepath)
-                if err:
-                    last_error = err
+            success = any(_try_ydl(video_url, filepath, s) for s in _ydl_strategies())
+            if success and os.path.exists(filepath) and os.path.getsize(filepath) >= 1000:
+                return _run_analysis(filepath)
             os.remove(filepath) if os.path.exists(filepath) else None
-            return jsonify({"error": f"Could not download video. {last_error}"}), 400
+            return jsonify({"error": "Could not download video from this platform. Download the file and upload directly."}), 400
 
+        # Direct video URL → try requests, fall back to yt-dlp
         resp = requests.get(video_url, stream=True, timeout=60, allow_redirects=True,
                             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code != 200:
             resp.close()
-            last_error = ""
-            for strategy in _ydl_strategies():
-                ok, err = _try_ydl(video_url, filepath, strategy)
-                if ok:
-                    return _run_analysis(filepath)
-                if err:
-                    last_error = err
-            return jsonify({"error": f"Failed to download video (HTTP {resp.status_code}). {last_error}"}), 400
+            success = any(_try_ydl(video_url, filepath, s) for s in _ydl_strategies())
+            if success and os.path.exists(filepath) and os.path.getsize(filepath) >= 1000:
+                return _run_analysis(filepath)
+            return jsonify({"error": f"Failed to download video (HTTP {resp.status_code})"}), 400
 
         content_type = (resp.headers.get('content-type', '') or '').lower()
         if 'text/html' in content_type:
             resp.close()
-            last_error = ""
-            for strategy in _ydl_strategies():
-                ok, err = _try_ydl(video_url, filepath, strategy)
-                if ok:
-                    return _run_analysis(filepath)
-                if err:
-                    last_error = err
-            return jsonify({"error": f"Could not download video. {last_error}"}), 400
+            success = any(_try_ydl(video_url, filepath, s) for s in _ydl_strategies())
+            if not success:
+                return jsonify({"error": "Could not download video from this platform. Download the file and upload directly."}), 400
+            if not os.path.exists(filepath) or os.path.getsize(filepath) < 1000:
+                os.remove(filepath)
+                return jsonify({"error": "Downloaded file is too small or invalid"}), 400
+            return _run_analysis(filepath)
 
         total = 0
         with open(filepath, 'wb') as f:
@@ -351,6 +221,39 @@ def analyze_video_url():
         if os.path.exists(filepath):
             os.remove(filepath)
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/compare', methods=['POST'])
+def compare_videos_endpoint():
+    if 'original' not in request.files or 'edited' not in request.files:
+        return jsonify({"error": "Both 'original' and 'edited' video files required"}), 400
+
+    orig_file = request.files['original']
+    edit_file = request.files['edited']
+
+    if orig_file.filename == '' or edit_file.filename == '':
+        return jsonify({"error": "Both files must be selected"}), 400
+
+    for f in [orig_file, edit_file]:
+        if not allowed_file(f.filename):
+            return jsonify({"error": f"File type not supported for {f.filename}. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
+
+    uid = str(uuid.uuid4())
+    orig_path = os.path.join(UPLOAD_FOLDER, f"{uid}_orig_{secure_filename(orig_file.filename)}")
+    edit_path = os.path.join(UPLOAD_FOLDER, f"{uid}_edit_{secure_filename(edit_file.filename)}")
+    orig_file.save(orig_path)
+    edit_file.save(edit_path)
+
+    try:
+        from detection_engine import compare_videos
+        result = compare_videos(orig_path, edit_path)
+        result["status"] = "success"
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        for p in [orig_path, edit_path]:
+            if os.path.exists(p):
+                os.remove(p)
 
 @app.route('/api/health', methods=['GET'])
 def health():

@@ -125,6 +125,40 @@ export function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+export interface CompareResult {
+  adjustments: Adjustments;
+  filters: Filter[];
+  effects: Filter[];
+  video_info: {
+    original: { width: number; height: number; fps: number; frames_analyzed: number };
+    edited: { width: number; height: number; fps: number; frames_analyzed: number };
+  };
+  status: string;
+}
+
+export async function compareVideos(original: File, edited: File): Promise<CompareResult> {
+  const formData = new FormData();
+  formData.append("original", original);
+  formData.append("edited", edited);
+
+  const response = await fetch(`${API_BASE}/api/compare`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    try {
+      const err = JSON.parse(text);
+      throw new Error(err.error || "Comparison failed");
+    } catch {
+      throw new Error(text || "Comparison failed");
+    }
+  }
+
+  return response.json();
+}
+
 export function capitalize(str: string): string {
   return str.replace(/\b\w/g, (c) => c.toUpperCase());
 }
