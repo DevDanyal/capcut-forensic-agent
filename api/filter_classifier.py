@@ -63,7 +63,7 @@ def classify_filters(
     noise_std_ratio = noise_analysis["noise_std"] / (reference_stats.get("noise_std", 0.005) + 1e-8)
     params["grain"] = _map_to_percent(noise_std_ratio, 0.0, 10.0, 0, 100)
 
-    center_vs_corner = vignette_analysis["center_vs_corner_ratio"]
+    center_vs_corner = vignette_analysis.get("center_vs_corner_ratio", 1.0)
     if center_vs_corner > 1.05:
         vignette_strength = (center_vs_corner - 1.0) * 200
         params["vignette"] = max(0, min(100, vignette_strength))

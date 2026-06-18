@@ -298,7 +298,7 @@ def _map_from_ratio(ratio: float, in_min: float, in_max: float, out_min: float, 
     result = out_min + t * (out_max - out_min)
     return max(out_min, min(out_max, result))
 
-def _load_sample_frames(video_path: str, max_frames: int = 30) -> Tuple[List[Tuple[float, np.ndarray]], float, int, int]:
+def _load_sample_frames(video_path: str, max_frames: int = 15, resize: int = 360) -> Tuple[List[Tuple[float, np.ndarray]], float, int, int]:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Could not open video: {video_path}")
@@ -309,7 +309,7 @@ def _load_sample_frames(video_path: str, max_frames: int = 30) -> Tuple[List[Tup
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    step = max(1, total // max_frames)
+    step = max(1, total // max_frames) if total > 0 else 1
     frames = []
     idx = 0
     while True:
@@ -317,7 +317,12 @@ def _load_sample_frames(video_path: str, max_frames: int = 30) -> Tuple[List[Tup
         if not ret:
             break
         if idx % step == 0:
-            frames.append((idx / fps, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w = rgb.shape[:2]
+            if max(h, w) > resize:
+                scale = resize / max(h, w)
+                rgb = cv2.resize(rgb, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            frames.append((idx / fps, rgb))
             if len(frames) >= max_frames:
                 break
         idx += 1
@@ -330,51 +335,43 @@ def compare_videos(original_path: str, edited_path: str) -> Dict:
 
     if len(orig_frames) == 0 or len(edit_frames) == 0:
         missing = "original" if len(orig_frames) == 0 else "edited"
-        raise ValueError(f"Could not extract any frames from the {missing} video. Unsupported codec or corrupted file.")
+        raise ValueError(f"Could not extract any frames from the {missing} video.")
 
     min_len = min(len(orig_frames), len(edit_frames))
     orig_frames = orig_frames[:min_len]
     edit_frames = edit_frames[:min_len]
 
-    lum = _average_dicts([analyze_luminance_stats(f) for _, f in orig_frames])
-    col = _average_dicts([analyze_color_matrix(f) for _, f in orig_frames])
-    sat = _average_dicts([analyze_saturation(f) for _, f in orig_frames])
-    edg = _average_dicts([analyze_edges(f) for _, f in orig_frames])
-    noi = _average_dicts([analyze_noise(f) for _, f in orig_frames])
-    vig = _average_dicts([analyze_vignette(f) for _, f in orig_frames])
+    def _process(frames):
+        lum = [analyze_luminance_stats(f) for _, f in frames]
+        col = [analyze_color_matrix(f) for _, f in frames]
+        sat = [analyze_saturation(f) for _, f in frames]
+        edg = [analyze_edges(f) for _, f in frames]
+        noi = [analyze_noise(f) for _, f in frames]
+        vig = [analyze_vignette(f) for _, f in frames]
+        return _average_dicts(lum), _average_dicts(col), _average_dicts(sat), _average_dicts(edg), _average_dicts(noi), _average_dicts(vig)
 
-    edit_lum = _average_dicts([analyze_luminance_stats(f) for _, f in edit_frames])
-    edit_col = _average_dicts([analyze_color_matrix(f) for _, f in edit_frames])
-    edit_sat = _average_dicts([analyze_saturation(f) for _, f in edit_frames])
-    edit_edg = _average_dicts([analyze_edges(f) for _, f in edit_frames])
-    edit_noi = _average_dicts([analyze_noise(f) for _, f in edit_frames])
-    edit_vig = _average_dicts([analyze_vignette(f) for _, f in edit_frames])
+    orig_lum, orig_col, orig_sat, orig_edg, orig_noi, _ = _process(orig_frames)
+    edit_lum, edit_col, edit_sat, edit_edg, edit_noi, _ = _process(edit_frames)
 
     ref = {
-        "mean": lum["mean"],
-        "std": lum["std"],
-        "mean_luminance": lum["mean"],
-        "luminance_std": lum["std"],
-        "p25": lum.get("p25", 64),
-        "p75": lum.get("p75", 192),
-        "p01": lum.get("p01", 0),
-        "p99": lum.get("p99", 255),
-        "top_10pct_mean": lum.get("top_10pct_mean", 255),
-        "bottom_10pct_mean": lum.get("bottom_10pct_mean", 0),
-        "min": lum.get("min", 0),
+        "mean": orig_lum["mean"], "std": orig_lum["std"],
+        "mean_luminance": orig_lum["mean"], "luminance_std": orig_lum["std"],
+        "p25": orig_lum.get("p25", 64), "p75": orig_lum.get("p75", 192),
+        "p01": orig_lum.get("p01", 0), "p99": orig_lum.get("p99", 255),
+        "top_10pct_mean": orig_lum.get("top_10pct_mean", 255),
+        "bottom_10pct_mean": orig_lum.get("bottom_10pct_mean", 0),
+        "min": orig_lum.get("min", 0),
     }
 
     hist_params = estimate_histogram_parameters(ref, edit_lum)
     color_params = estimate_color_parameters(
-        {"g_r_ratio_deviation": col.get("g_r_ratio_deviation", 0.0)},
-        edit_col,
+        {"g_r_ratio_deviation": orig_col.get("g_r_ratio_deviation", 0.0)}, edit_col,
     )
     sat_params = estimate_saturation_parameters(
-        {"mean_saturation": sat["mean_saturation"],
-         "low_sat_energy": sat.get("low_sat_energy", 0.5),
-         "mid_sat_energy": sat.get("mid_sat_energy", 0.5),
-         "high_sat_energy": sat.get("high_sat_energy", 0.05)},
-        edit_sat,
+        {"mean_saturation": orig_sat["mean_saturation"],
+         "low_sat_energy": orig_sat.get("low_sat_energy", 0.5),
+         "mid_sat_energy": orig_sat.get("mid_sat_energy", 0.5),
+         "high_sat_energy": orig_sat.get("high_sat_energy", 0.05)}, edit_sat,
     )
 
     adjustments_raw = {
@@ -389,24 +386,16 @@ def compare_videos(original_path: str, edited_path: str) -> Dict:
         "temperature": round(color_params.get("temperature", 0), 0),
         "tint": round(color_params.get("tint", 0), 0),
         "vibrance": round(sat_params.get("vibrance", 0), 0),
-        "sharpness": round(_map_from_ratio(edit_edg["laplacian_variance"] / max(edg.get("laplacian_variance", 120), 1), 0.3, 3.0, -100, 100), 0),
+        "sharpness": round(_map_from_ratio(edit_edg["laplacian_variance"] / max(orig_edg.get("laplacian_variance", 120), 1), 0.3, 3.0, -100, 100), 0),
     }
     adjustments = _compensate_interactions(adjustments_raw)
 
-    filters_detected = classify_filters(edit_lum, edit_col, edit_sat, edit_edg, edit_noi, edit_vig, {**ref,
-        "mean_luminance": lum["mean"],
-        "luminance_std": lum["std"],
-        "mean_saturation": sat["mean_saturation"],
-        "noise_std": noi["noise_std"],
-        "laplacian_variance": edg["laplacian_variance"],
-        "p25": lum.get("p25", 64),
-        "p75": lum.get("p75", 192),
-        "p01": lum.get("p01", 0),
-        "p99": lum.get("p99", 255),
-        "top_10pct_mean": lum.get("top_10pct_mean", 255),
-        "bottom_10pct_mean": lum.get("bottom_10pct_mean", 0),
-        "min": lum.get("min", 0),
-    })
+    filters_ref = {**ref,
+        "mean_saturation": orig_sat["mean_saturation"],
+        "noise_std": orig_noi["noise_std"],
+        "laplacian_variance": orig_edg["laplacian_variance"],
+    }
+    filters_detected = classify_filters(edit_lum, edit_col, edit_sat, edit_edg, edit_noi, {}, filters_ref)
 
     return {
         "adjustments": adjustments,
