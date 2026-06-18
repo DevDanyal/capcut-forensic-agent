@@ -75,7 +75,7 @@ export interface AnalysisResult {
 const API_BASE =
   typeof window !== "undefined" && window.location.hostname === "localhost"
     ? "http://localhost:5000"
-    : "/api";
+    : "";
 
 export async function analyzeVideo(file: File): Promise<AnalysisResult> {
   const formData = new FormData();
