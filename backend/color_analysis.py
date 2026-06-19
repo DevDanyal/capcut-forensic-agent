@@ -212,31 +212,31 @@ def estimate_histogram_parameters(ref_stats: Dict, cur_stats: Dict) -> Dict:
 
     params = {}
     mean_diff = cur_stats["mean"] - ref_stats["mean"]
-    params["brightness"] = lerp(mean_diff, (-70, 70), (-100, 100))
+    params["brightness"] = lerp(mean_diff, (-50, 50), (-100, 100))
 
     std_ratio = cur_stats["std"] / (ref_stats["std"] + 1e-8)
-    params["contrast"] = lerp(std_ratio, (0.2, 3.0), (-100, 100))
+    params["contrast"] = lerp(std_ratio, (0.5, 2.0), (-100, 100))
 
-    shadows_diff = cur_stats["p25"] - ref_stats.get("p25", 64)
-    params["shadows"] = lerp(shadows_diff, (-45, 45), (-100, 100))
+    shadows_diff = cur_stats["p25"] - ref_stats.get("p25", ref_stats["mean"] - ref_stats["std"])
+    params["shadows"] = lerp(shadows_diff, (-50, 60), (-100, 100))
 
-    highlights_diff = cur_stats["p75"] - ref_stats.get("p75", 192)
-    params["highlights"] = lerp(highlights_diff, (-45, 45), (-100, 100))
+    highlights_diff = cur_stats["p75"] - ref_stats.get("p75", ref_stats["mean"] + ref_stats["std"])
+    params["highlights"] = lerp(highlights_diff, (-60, 50), (-100, 100))
 
-    whites_diff = cur_stats.get("p99", 255) - ref_stats.get("p99", 255)
-    params["whites"] = lerp(whites_diff, (-25, 25), (-100, 100))
+    whites_diff = cur_stats.get("p99", 255) - ref_stats.get("p99", 245)
+    params["whites"] = lerp(whites_diff, (-30, 30), (-100, 100))
 
-    blacks_diff = cur_stats.get("p01", 0) - ref_stats.get("p01", 0)
-    params["blacks"] = lerp(blacks_diff, (-25, 25), (-100, 100))
+    blacks_diff = cur_stats.get("p01", 0) - ref_stats.get("p01", 10)
+    params["blacks"] = lerp(blacks_diff, (-20, 20), (-100, 100))
 
     top_pct = cur_stats.get("top_10pct_mean", 255)
-    ref_top = ref_stats.get("top_10pct_mean", 255)
+    ref_top = ref_stats.get("top_10pct_mean", ref_stats["mean"] + ref_stats["std"] * 1.5)
     top_diff = top_pct - ref_top
-    exposure_from_highlights = lerp(top_diff, (-50, 50), (-5, 5))
+    exposure_from_highlights = lerp(top_diff, (-60, 60), (-5, 5))
     params["exposure"] = exposure_from_highlights
 
     min_val = cur_stats.get("min", 0)
-    ref_min = ref_stats.get("min", 0)
+    ref_min = ref_stats.get("min", cur_stats.get("p01", 10))
     if min_val > ref_min + 5:
         params["fade_black_lift"] = lerp(min_val - ref_min, (0, 50), (0, 100))
 
@@ -246,12 +246,12 @@ def estimate_color_parameters(ref_matrix: Dict, cur_matrix: Dict) -> Dict:
     params = {}
 
     r_b_ratio_cur = cur_matrix["r_b_ratio"]
-    r_b_ratio_ref = 1.0
-    temp_shift = (r_b_ratio_cur - r_b_ratio_ref) * 100
+    r_b_ratio_ref = ref_matrix.get("r_b_ratio", 1.0)
+    temp_shift = (r_b_ratio_cur - r_b_ratio_ref) * 200
     params["temperature"] = max(-100, min(100, temp_shift))
 
     g_r_dev = cur_matrix["g_r_ratio_deviation"] - (ref_matrix.get("g_r_ratio_deviation", 0.0))
-    tint_shift = g_r_dev * 150
+    tint_shift = g_r_dev * 300
     params["tint"] = max(-100, min(100, tint_shift))
 
     return params
@@ -259,23 +259,20 @@ def estimate_color_parameters(ref_matrix: Dict, cur_matrix: Dict) -> Dict:
 def estimate_saturation_parameters(ref_sat: Dict, cur_sat: Dict) -> Dict:
     params = {}
     sat_ratio = cur_sat["mean_saturation"] / (ref_sat.get("mean_saturation", 0.2) + 1e-8)
-    params["saturation"] = max(-100, min(100, (sat_ratio - 1.0) * 80))
+    params["saturation"] = max(-100, min(100, (sat_ratio - 1.0) * 100))
 
     low_sat_ratio = cur_sat["low_sat_energy"] / (ref_sat.get("low_sat_energy", 0.5) + 1e-8)
     high_sat_ratio = cur_sat["high_sat_energy"] / (ref_sat.get("high_sat_energy", 0.05) + 1e-8)
 
     vibrance = 0.0
     if low_sat_ratio < 0.85 and sat_ratio > 1.05:
-        vibrance = (1.0 - low_sat_ratio) * 120
+        boost = (1.0 - low_sat_ratio)
+        vibrance = boost * 100
     elif high_sat_ratio > 1.5 and sat_ratio > 1.1:
-        vibrance = (high_sat_ratio - 1.0) * -60
-    else:
-        mid_ratio = cur_sat.get("mid_sat_energy", 0.5) / (ref_sat.get("mid_sat_energy", 0.3) + 1e-8)
-        if mid_ratio > 1.1:
-            vibrance = (mid_ratio - 1.0) * 80
-        elif sat_ratio > 1.03:
-            vibrance = (sat_ratio - 1.0) * 60
-    if vibrance > 0:
-        params["vibrance"] = max(0, min(100, vibrance))
+        vibrance = (high_sat_ratio - 1.0) * -50
+    elif sat_ratio > 1.03:
+        vibrance = (sat_ratio - 1.0) * 80
+    if abs(vibrance) > 3:
+        params["vibrance"] = max(-100, min(100, vibrance))
 
     return params

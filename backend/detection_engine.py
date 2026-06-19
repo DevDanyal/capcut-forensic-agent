@@ -1,21 +1,6 @@
-import cv2
 import numpy as np
 import os
 from typing import List, Dict, Tuple, Optional
-from shot_detection import detect_shots, detect_transitions
-from color_analysis import (
-    analyze_luminance_stats,
-    analyze_color_matrix,
-    analyze_saturation,
-    analyze_edges,
-    analyze_noise,
-    analyze_vignette,
-    estimate_histogram_parameters,
-    estimate_color_parameters,
-    estimate_saturation_parameters,
-)
-from filter_classifier import classify_filters
-from reference_card import get_neutral_reference
 
 class DetectionEngine:
     def __init__(self, video_path: str, sample_interval: float = 0.5, max_frames: int = 300):
@@ -29,7 +14,7 @@ class DetectionEngine:
         self.height = 0
 
     def extract_frames(self) -> bool:
-        import os as _os
+        import os as _os, cv2
         if not _os.path.exists(self.video_path):
             self._error = f"Video file not found: {self.video_path}"
             return False
@@ -95,6 +80,16 @@ class DetectionEngine:
         return True
 
     def analyze(self) -> Dict:
+        from shot_detection import detect_shots, detect_transitions
+        from color_analysis import (
+            analyze_luminance_stats, analyze_color_matrix, analyze_saturation,
+            analyze_edges, analyze_noise, analyze_vignette,
+            estimate_histogram_parameters, estimate_color_parameters,
+            estimate_saturation_parameters,
+        )
+        from filter_classifier import classify_filters
+        from reference_card import compute_dynamic_reference, get_neutral_reference
+
         analysis = {
             "video_info": self._get_video_info(),
             "shots": [],
@@ -111,8 +106,6 @@ class DetectionEngine:
 
         shots = detect_shots(self.frames)
         analysis["shots"] = shots
-
-        ref = get_neutral_reference()
 
         all_lum_stats = []
         all_color_matrix = []
@@ -143,25 +136,29 @@ class DetectionEngine:
         avg_noise = _average_dicts(all_noise)
         avg_vig = _average_dicts(all_vignette)
 
-        first_frame_stats = analyze_luminance_stats(self.frames[0][1])
-        last_frame_stats = analyze_luminance_stats(self.frames[-1][1])
+        ref = compute_dynamic_reference(self.frames, all_lum_stats, all_color_matrix,
+                                         all_saturation, all_edge, all_noise, all_vignette)
 
-        # Adjustments detection
         hist_params = estimate_histogram_parameters(
             {"mean": ref["mean_luminance"], "std": ref["luminance_std"],
-             "p25": 64, "p75": 192, "p01": 0, "p99": 255,
-             "top_10pct_mean": 255, "bottom_10pct_mean": 0},
+             "p25": ref["p25"], "p75": ref["p75"], "p01": ref["p01"], "p99": ref["p99"],
+             "top_10pct_mean": ref["top_10pct_mean"], "bottom_10pct_mean": ref["bottom_10pct_mean"],
+             "min": ref["min"]},
             avg_lum,
         )
         color_params = estimate_color_parameters(
-            {"g_r_ratio_deviation": 0.0},
+            {"g_r_ratio_deviation": ref.get("g_r_ratio_deviation", 0.0), "r_b_ratio": ref.get("r_b_ratio", 1.0)},
             avg_color,
         )
         sat_params = estimate_saturation_parameters(
-            {"mean_saturation": ref["mean_saturation"], "low_sat_energy": 0.5, "mid_sat_energy": 0.5, "high_sat_energy": 0.05},
+            {"mean_saturation": ref["mean_saturation"],
+             "low_sat_energy": ref.get("low_sat_energy", 0.5),
+             "mid_sat_energy": ref.get("mid_sat_energy", 0.5),
+             "high_sat_energy": ref.get("high_sat_energy", 0.05)},
             avg_sat,
         )
 
+        lap_var_ratio = avg_edge["laplacian_variance"] / max(ref["laplacian_variance"], 1)
         adjustments_raw = {
             "brightness": hist_params.get("brightness", 0),
             "contrast": hist_params.get("contrast", 0),
@@ -174,15 +171,12 @@ class DetectionEngine:
             "temperature": round(color_params.get("temperature", 0), 0),
             "tint": round(color_params.get("tint", 0), 0),
             "vibrance": round(sat_params.get("vibrance", 0), 0),
-            "sharpness": round(_map_from_ratio(avg_edge["laplacian_variance"] / ref["laplacian_variance"], 0.3, 3.0, -100, 100), 0),
+            "sharpness": round(_map_from_ratio(lap_var_ratio, 0.5, 2.5, 0, 100), 0),
         }
-        adjustments = _compensate_interactions(adjustments_raw)
+        adjustments = adjustments_raw
         analysis["adjustments"] = adjustments
 
-        ref_for_classifier = {**ref, "p25": 64, "p75": 192, "p01": 0, "p99": 255,
-                               "top_10pct_mean": 255, "bottom_10pct_mean": 0}
-
-        all_detected = classify_filters(avg_lum, avg_color, avg_sat, avg_edge, avg_noise, avg_vig, ref_for_classifier)
+        all_detected = classify_filters(avg_lum, avg_color, avg_sat, avg_edge, avg_noise, avg_vig, ref)
         analysis["filters"] = [d for d in all_detected if d.get("type") != "effect"]
         analysis["effects"] = [d for d in all_detected if d.get("type") == "effect"]
 
@@ -299,6 +293,7 @@ def _map_from_ratio(ratio: float, in_min: float, in_max: float, out_min: float, 
     return max(out_min, min(out_max, result))
 
 def _load_sample_frames(video_path: str, max_frames: int = 15, resize: int = 360) -> Tuple[List[Tuple[float, np.ndarray]], float, int, int]:
+    import cv2
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Could not open video: {video_path}")
@@ -329,17 +324,72 @@ def _load_sample_frames(video_path: str, max_frames: int = 15, resize: int = 360
     cap.release()
     return frames, fps, width, height
 
+def _load_aligned_frames(orig_path: str, edit_path: str, max_frames: int = 30) -> Tuple[List[Tuple[float, np.ndarray]], List[Tuple[float, np.ndarray]], float, float, int, int, int, int]:
+    import cv2
+
+    def _open(path):
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video: {path}")
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0 or fps > 1000:
+            fps = 30.0
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        return cap, fps, total, w, h
+
+    cap_o, fps_o, total_o, ow, oh = _open(orig_path)
+    cap_e, fps_e, total_e, ew, eh = _open(edit_path)
+
+    dur_o = total_o / fps_o if total_o > 0 else 0
+    dur_e = total_e / fps_e if total_e > 0 else 0
+    dur_min = min(dur_o, dur_e)
+
+    timestamps = []
+    step = dur_min / max_frames
+    for i in range(max_frames):
+        timestamps.append(i * step)
+
+    orig_out, edit_out = [], []
+    for t in timestamps:
+        frame_idx_o = int(t * fps_o)
+        cap_o.set(cv2.CAP_PROP_POS_FRAMES, frame_idx_o)
+        ret_o, f_o = cap_o.read()
+        if not ret_o:
+            continue
+        rgb_o = cv2.cvtColor(f_o, cv2.COLOR_BGR2RGB)
+
+        frame_idx_e = int(t * fps_e)
+        cap_e.set(cv2.CAP_PROP_POS_FRAMES, frame_idx_e)
+        ret_e, f_e = cap_e.read()
+        if not ret_e:
+            continue
+        rgb_e = cv2.cvtColor(f_e, cv2.COLOR_BGR2RGB)
+
+        orig_out.append((t, rgb_o))
+        edit_out.append((t, rgb_e))
+
+    cap_o.release()
+    cap_e.release()
+    return orig_out, edit_out, fps_o, fps_e, ow, oh, ew, eh
+
 def compare_videos(original_path: str, edited_path: str) -> Dict:
-    orig_frames, orig_fps, orig_w, orig_h = _load_sample_frames(original_path)
-    edit_frames, edit_fps, edit_w, edit_h = _load_sample_frames(edited_path)
+    from color_analysis import (
+        analyze_luminance_stats, analyze_color_matrix, analyze_saturation,
+        analyze_edges, analyze_noise, analyze_vignette,
+        estimate_histogram_parameters, estimate_color_parameters,
+        estimate_saturation_parameters,
+    )
+    from filter_classifier import classify_filters
+
+    orig_frames, edit_frames, orig_fps, edit_fps, orig_w, orig_h, edit_w, edit_h = _load_aligned_frames(
+        original_path, edited_path, max_frames=30
+    )
 
     if len(orig_frames) == 0 or len(edit_frames) == 0:
         missing = "original" if len(orig_frames) == 0 else "edited"
         raise ValueError(f"Could not extract any frames from the {missing} video.")
-
-    min_len = min(len(orig_frames), len(edit_frames))
-    orig_frames = orig_frames[:min_len]
-    edit_frames = edit_frames[:min_len]
 
     def _process(frames):
         lum = [analyze_luminance_stats(f) for _, f in frames]
@@ -356,16 +406,18 @@ def compare_videos(original_path: str, edited_path: str) -> Dict:
     ref = {
         "mean": orig_lum["mean"], "std": orig_lum["std"],
         "mean_luminance": orig_lum["mean"], "luminance_std": orig_lum["std"],
-        "p25": orig_lum.get("p25", 64), "p75": orig_lum.get("p75", 192),
+        "p25": orig_lum.get("p25", orig_lum["mean"] - orig_lum["std"]),
+        "p75": orig_lum.get("p75", orig_lum["mean"] + orig_lum["std"]),
         "p01": orig_lum.get("p01", 0), "p99": orig_lum.get("p99", 255),
-        "top_10pct_mean": orig_lum.get("top_10pct_mean", 255),
-        "bottom_10pct_mean": orig_lum.get("bottom_10pct_mean", 0),
+        "top_10pct_mean": orig_lum.get("top_10pct_mean", orig_lum["mean"] + orig_lum["std"] * 1.5),
+        "bottom_10pct_mean": orig_lum.get("bottom_10pct_mean", orig_lum["mean"] - orig_lum["std"] * 0.8),
         "min": orig_lum.get("min", 0),
     }
 
     hist_params = estimate_histogram_parameters(ref, edit_lum)
     color_params = estimate_color_parameters(
-        {"g_r_ratio_deviation": orig_col.get("g_r_ratio_deviation", 0.0)}, edit_col,
+        {"g_r_ratio_deviation": orig_col.get("g_r_ratio_deviation", 0.0),
+         "r_b_ratio": orig_col.get("r_b_ratio", 1.0)}, edit_col,
     )
     sat_params = estimate_saturation_parameters(
         {"mean_saturation": orig_sat["mean_saturation"],
@@ -386,7 +438,7 @@ def compare_videos(original_path: str, edited_path: str) -> Dict:
         "temperature": round(color_params.get("temperature", 0), 0),
         "tint": round(color_params.get("tint", 0), 0),
         "vibrance": round(sat_params.get("vibrance", 0), 0),
-        "sharpness": round(_map_from_ratio(edit_edg["laplacian_variance"] / max(orig_edg.get("laplacian_variance", 120), 1), 0.3, 3.0, -100, 100), 0),
+        "sharpness": round(_map_from_ratio(edit_edg["laplacian_variance"] / max(orig_edg.get("laplacian_variance", 100), 1), 0.5, 2.5, 0, 100), 0),
     }
     adjustments = _compensate_interactions(adjustments_raw)
 
@@ -394,6 +446,9 @@ def compare_videos(original_path: str, edited_path: str) -> Dict:
         "mean_saturation": orig_sat["mean_saturation"],
         "noise_std": orig_noi["noise_std"],
         "laplacian_variance": orig_edg["laplacian_variance"],
+        "low_sat_energy": orig_sat.get("low_sat_energy", 0.5),
+        "mid_sat_energy": orig_sat.get("mid_sat_energy", 0.5),
+        "high_sat_energy": orig_sat.get("high_sat_energy", 0.05),
     }
     filters_detected = classify_filters(edit_lum, edit_col, edit_sat, edit_edg, edit_noi, {}, filters_ref)
 
@@ -409,45 +464,13 @@ def compare_videos(original_path: str, edited_path: str) -> Dict:
 
 def _compensate_interactions(adj: Dict[str, float]) -> Dict[str, float]:
     out = dict(adj)
-
-    c = out.get("contrast", 0)
-    h = out.get("highlights", 0)
-    s = out.get("shadows", 0)
-    b = out.get("brightness", 0)
-
-    # Contrast stretches histogram → pulls mean toward midpoint.
-    # If contrast > 0, some of the measured mean shift is from contrast, not brightness.
-    # Compensate: reduce brightness by ~contrast * 0.15
-    if abs(c) > 5 and abs(b) > 5:
-        out["brightness"] = b - c * 0.15
-
-    # Highlights boost also lifts the mean → reduce brightness slightly
-    if h > 5:
-        out["brightness"] = out.get("brightness", b) - h * 0.10
-
-    # Shadows lift also lifts the mean → reduce brightness slightly
-    if s > 5:
-        out["brightness"] = out.get("brightness", b) - s * 0.08
-
-    # Brightness change affects contrast stats (brighter → lower relative std)
-    if abs(b) > 5:
-        out["contrast"] = c + b * 0.08
-
-    # Temperature affects r/b ratio which influences tint detection
-    t_val = out.get("temperature", 0)
-    if abs(t_val) > 5:
-        tint_from_temp = t_val * 0.12
-        out["tint"] = max(-100, min(100, out.get("tint", 0) - tint_from_temp))
-
-    # Clamp all values
     for k in out:
         if k == "exposure":
             out[k] = max(-5, min(5, out[k]))
         elif k == "vibrance":
-            out[k] = max(-50, min(50, out[k]))
+            out[k] = max(-100, min(100, out[k]))
         elif k == "sharpness":
             out[k] = max(0, min(100, out[k]))
         else:
             out[k] = max(-100, min(100, out[k]))
-
     return out

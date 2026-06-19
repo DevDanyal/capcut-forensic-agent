@@ -8,9 +8,10 @@ import LoadingScreen from "@/components/LoadingScreen";
 import ResultsDashboard from "@/components/ResultsDashboard";
 import AdjustmentsPanel from "@/components/AdjustmentsPanel";
 import FilterGrid from "@/components/FilterGrid";
+import ApplyEditsPanel from "@/components/ApplyEditsPanel";
 
 export default function Home() {
-  const [mode, setMode] = useState<"single" | "compare">("single");
+  const [mode, setMode] = useState<"single" | "compare" | "apply">("single");
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
@@ -109,11 +110,23 @@ export default function Home() {
               >
                 Before / After
               </button>
+              <button
+                onClick={() => setMode("apply")}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
+                  mode === "apply"
+                    ? "bg-[var(--color-accent)] text-white shadow-[0_0_20px_var(--color-accent-dim)]"
+                    : "border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]/50"
+                }`}
+              >
+                Apply Edits
+              </button>
             </div>
             {mode === "single" ? (
               <UploadZone onFile={handleFile} onUrl={handleUrl} />
-            ) : (
+            ) : mode === "compare" ? (
               <CompareUpload onCompare={handleCompare} />
+            ) : (
+              <ApplyEditsPanel />
             )}
           </>
         )}

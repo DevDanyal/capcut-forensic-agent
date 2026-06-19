@@ -162,3 +162,35 @@ export async function compareVideos(original: File, edited: File): Promise<Compa
 export function capitalize(str: string): string {
   return str.replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+export interface ApplyEditsResult {
+  status: string;
+  adjustments: Adjustments;
+  filters: Filter[];
+  effects: Filter[];
+  video_data: string;
+  video_mime: string;
+}
+
+export async function applyEdits(original: File, reference: File): Promise<ApplyEditsResult> {
+  const formData = new FormData();
+  formData.append("original", original);
+  formData.append("reference", reference);
+
+  const response = await fetch(`${API_BASE}/api/apply-edits`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    try {
+      const err = JSON.parse(text);
+      throw new Error(err.error || "Failed to apply edits");
+    } catch {
+      throw new Error(text || "Failed to apply edits");
+    }
+  }
+
+  return response.json();
+}

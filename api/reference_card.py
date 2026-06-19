@@ -1,4 +1,3 @@
-import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
 
@@ -294,11 +293,53 @@ FILTER_NAMES_MAP = {
 
 def get_neutral_reference():
     return {
-        "mean_luminance": 128.0,
-        "luminance_std": 65.0,
-        "mean_saturation": 0.2,
+        "mean_luminance": 118.0,
+        "luminance_std": 58.0,
+        "mean_saturation": 0.22,
         "r_b_ratio": 1.0,
         "g_channel_offset": 0.0,
-        "laplacian_variance": 120.0,
+        "laplacian_variance": 100.0,
         "noise_std": 0.005,
     }
+
+def compute_dynamic_reference(frames, all_lum, all_color, all_sat, all_edge, all_noise, all_vig):
+    import numpy as np
+    if not all_lum:
+        return get_neutral_reference()
+
+    def median_dict(dicts, key):
+        vals = [d[key] for d in dicts if key in d and isinstance(d.get(key), (int, float))]
+        return float(np.median(vals)) if vals else 0.0
+
+    def pct_dict(dicts, key, pct):
+        vals = [d[key] for d in dicts if key in d and isinstance(d.get(key), (int, float))]
+        return float(np.percentile(vals, pct)) if vals else 0.0
+
+    ref = {
+        "mean_luminance": median_dict(all_lum, "mean"),
+        "luminance_std": median_dict(all_lum, "std"),
+        "mean_saturation": median_dict(all_sat, "mean_saturation"),
+        "r_b_ratio": median_dict(all_color, "r_b_ratio"),
+        "g_channel_offset": 0.0,
+        "g_r_ratio_deviation": median_dict(all_color, "g_r_ratio_deviation"),
+        "laplacian_variance": median_dict(all_edge, "laplacian_variance"),
+        "noise_std": median_dict(all_noise, "noise_std"),
+        "p25": median_dict(all_lum, "p25"),
+        "p75": median_dict(all_lum, "p75"),
+        "p01": median_dict(all_lum, "p01"),
+        "p99": median_dict(all_lum, "p99"),
+        "top_10pct_mean": median_dict(all_lum, "top_10pct_mean"),
+        "bottom_10pct_mean": median_dict(all_lum, "bottom_10pct_mean"),
+        "min": pct_dict(all_lum, "min", 10),
+        "low_sat_energy": median_dict(all_sat, "low_sat_energy"),
+        "mid_sat_energy": median_dict(all_sat, "mid_sat_energy"),
+        "high_sat_energy": median_dict(all_sat, "high_sat_energy"),
+    }
+    safe_defaults = get_neutral_reference()
+    for k in safe_defaults:
+        if k not in ref or ref.get(k) is None or ref.get(k) == 0.0:
+            ref.setdefault(k, safe_defaults[k])
+    if ref["mean_luminance"] < 10 or ref["mean_luminance"] > 250:
+        ref["mean_luminance"] = safe_defaults["mean_luminance"]
+
+    return ref

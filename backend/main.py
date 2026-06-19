@@ -1,17 +1,13 @@
 import os
 import uuid
-import cv2
-import base64
 import requests
 import numpy as np
-import yt_dlp
 import threading
 import concurrent.futures
 from urllib.parse import urlparse
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-from detection_engine import DetectionEngine
 
 app = Flask(__name__)
 CORS(app)
@@ -46,6 +42,9 @@ def analyze_video():
     file.save(filepath)
 
     try:
+        import cv2, base64
+        from detection_engine import DetectionEngine
+
         engine = DetectionEngine(filepath, sample_interval=0.5, max_frames=300)
         if not engine.extract_frames():
             err_msg = getattr(engine, '_error', 'Could not extract frames from video')
@@ -86,6 +85,8 @@ PLATFORM_DOMAINS = {
 }
 
 def _try_ydl(video_url: str, filepath: str, opts_extra: dict) -> bool:
+    import yt_dlp
+
     base = {
         'format': 'best[ext=mp4]/best[height<=1080]/worst',
         'quiet': True, 'no_warnings': True,
@@ -120,6 +121,9 @@ def _ydl_strategies():
     return s
 
 def _run_analysis(filepath: str):
+    import cv2, base64
+    from detection_engine import DetectionEngine
+
     engine = DetectionEngine(filepath, sample_interval=0.5, max_frames=300)
     if not engine.extract_frames():
         err_msg = getattr(engine, '_error', 'Could not extract frames from video')
@@ -258,6 +262,58 @@ def compare_videos_endpoint():
         for p in [orig_path, edit_path]:
             if p and os.path.exists(p):
                 os.remove(p)
+
+@app.route('/api/apply-edits', methods=['POST'])
+def apply_edits_endpoint():
+    orig_path = ref_path = out_path = None
+    try:
+        if 'original' not in request.files or 'reference' not in request.files:
+            return jsonify({"error": "Both original and reference video files required"}), 400
+        orig_file = request.files['original']
+        ref_file = request.files['reference']
+        if orig_file.filename == '' or ref_file.filename == '':
+            return jsonify({"error": "Both files must be selected"}), 400
+        for f in [orig_file, ref_file]:
+            if not allowed_file(f.filename):
+                return jsonify({"error": f"File type not supported for {f.filename}"}), 400
+        uid = str(uuid.uuid4())
+        orig_path = os.path.join(UPLOAD_FOLDER, f"{uid}_orig_{secure_filename(orig_file.filename)}")
+        ref_path = os.path.join(UPLOAD_FOLDER, f"{uid}_ref_{secure_filename(ref_file.filename)}")
+        out_path = os.path.join(UPLOAD_FOLDER, f"{uid}_output.mp4")
+        orig_file.save(orig_path)
+        ref_file.save(ref_path)
+
+        from detection_engine import compare_videos
+        from edit_applier import apply_edits_to_video
+
+        result = compare_videos(orig_path, ref_path)
+        adjustments = result.get("adjustments", {})
+
+        success = apply_edits_to_video(orig_path, out_path, adjustments)
+        if not success:
+            return jsonify({"error": "Failed to process video"}), 500
+
+        import base64
+        with open(out_path, 'rb') as f:
+            video_b64 = base64.b64encode(f.read()).decode('utf-8')
+
+        return jsonify({
+            "status": "success",
+            "adjustments": adjustments,
+            "filters": result.get("filters", []),
+            "effects": result.get("effects", []),
+            "video_data": video_b64,
+            "video_mime": "video/mp4",
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        for p in [orig_path, ref_path, out_path]:
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
 @app.route('/api/health', methods=['GET'])
 def health():
