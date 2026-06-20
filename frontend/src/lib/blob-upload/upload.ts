@@ -26,8 +26,15 @@ async function uploadToTmpFiles(file: File): Promise<UploadResult> {
     throw new Error("tmpfiles.org upload failed: unexpected response");
   }
 
+  // Convert landing-page URL to direct download URL
+  const rawUrl: string = data.data.url;
+  const directUrl = rawUrl.replace(
+    /https:\/\/tmpfiles\.org\/([^/]+\/[^/]+)$/,
+    "https://tmpfiles.org/dl/$1"
+  );
+
   return {
-    url: data.data.url,
+    url: directUrl,
     contentType: file.type,
   };
 }

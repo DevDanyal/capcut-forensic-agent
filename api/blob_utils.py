@@ -45,36 +45,61 @@ def download_from_blob(blob_url: str, save_dir: str) -> str | None:
         return None
 
 
+def _upload_to_tmpfiles(local_path: str) -> str | None:
+    try:
+        with open(local_path, 'rb') as f:
+            resp = requests.post(
+                "https://tmpfiles.org/api/v1/upload",
+                files={"file": (os.path.basename(local_path), f, "video/mp4")},
+                timeout=300,
+            )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if data.get("status") != "success" or not data.get("data", {}).get("url"):
+            return None
+        raw_url = data["data"]["url"]
+        import re
+        direct_url = re.sub(
+            r"https://tmpfiles\.org/([^/]+/[^/]+)$",
+            r"https://tmpfiles.org/dl/\1",
+            raw_url,
+        )
+        return direct_url
+    except Exception:
+        return None
+
+
 def upload_to_blob(local_path: str, content_type: str | None = None) -> str | None:
     token = os.environ.get('BLOB_READ_WRITE_TOKEN')
-    if not token:
-        return None
 
     if content_type is None:
         content_type, _ = mimetypes.guess_type(local_path)
         if not content_type:
             content_type = 'video/mp4'
 
-    filename = os.path.basename(local_path)
-    pathname = f"results/{uuid.uuid4()}_{filename}"
+    if token:
+        filename = os.path.basename(local_path)
+        pathname = f"results/{uuid.uuid4()}_{filename}"
 
-    try:
-        with open(local_path, 'rb') as f:
-            resp = requests.put(
-                f"{BLOB_ENDPOINT}/{pathname}",
-                data=f,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": content_type,
-                    "x-blob-add-random-suffix": "1",
-                },
-                timeout=300,
-            )
+        try:
+            with open(local_path, 'rb') as f:
+                resp = requests.put(
+                    f"{BLOB_ENDPOINT}/{pathname}",
+                    data=f,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": content_type,
+                        "x-blob-add-random-suffix": "1",
+                    },
+                    timeout=300,
+                )
 
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("url")
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("url")
 
-        return None
-    except Exception:
-        return None
+        except Exception:
+            pass
+
+    return _upload_to_tmpfiles(local_path)
