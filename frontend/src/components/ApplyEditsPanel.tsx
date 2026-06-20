@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { applyEdits, type ApplyEditsResult, formatDuration } from "@/lib/api";
+import { applyEdits, type ApplyEditsResult } from "@/lib/api";
 import AdjustmentsPanel from "./AdjustmentsPanel";
 import FilterGrid from "./FilterGrid";
 
@@ -11,7 +11,6 @@ export default function ApplyEditsPanel() {
   const [processing, setProcessing] = useState(false);
   const [result, setResult] = useState<ApplyEditsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   const handleStart = async () => {
     if (!originalFile || !referenceFile) return;
@@ -28,15 +27,25 @@ export default function ApplyEditsPanel() {
     }
   };
 
-  const handleSave = () => {
-    if (!result?.video_data) return;
-    const link = document.createElement("a");
-    link.href = `data:${result.video_mime};base64,${result.video_data}`;
+  const handleDownload = () => {
+    if (!result) return;
+    const url = result.result_blob_url ||
+      (result.download_token
+        ? `${window.location.protocol}//${window.location.hostname === "localhost" ? "localhost:5000" : window.location.host}/api/download-video/${result.download_token}`
+        : null);
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
     const name = originalFile?.name?.replace(/\.[^.]+$/, "") || "edited";
-    link.download = `${name}_edited.mp4`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    a.download = `${name}_edited.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const reset = () => {
@@ -115,27 +124,27 @@ export default function ApplyEditsPanel() {
                 New
               </button>
               <button
-                onClick={handleSave}
+                onClick={handleDownload}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold text-white bg-[var(--color-accent)] cursor-pointer transition-all hover:shadow-[0_0_24px_var(--color-accent-dim)]"
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                   <path d="M13 10v2a1 1 0 01-1 1H4a1 1 0 01-1-1v-2M8 2v8M5 7l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-                Save Video
+                Save Video ({formatSize(result.video_size)})
               </button>
             </div>
           </div>
 
-          {result.video_data && (
-            <div className="rounded-xl overflow-hidden border border-[var(--color-border)] mb-4 bg-black">
-              <video
-                ref={videoRef}
-                src={`data:${result.video_mime};base64,${result.video_data}`}
-                controls
-                className="w-full max-h-[400px]"
-              />
-            </div>
-          )}
+          <div className="rounded-xl overflow-hidden border border-[var(--color-border)] mb-4 bg-[var(--color-bg-card)] p-8 text-center">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none" className="mx-auto mb-3 text-[var(--color-accent)] opacity-60">
+              <rect x="6" y="6" width="36" height="36" rx="8" stroke="currentColor" strokeWidth="2" />
+              <path d="M20 18v12l10-6-10-6z" fill="currentColor" opacity="0.8" />
+            </svg>
+            <p className="text-sm text-[var(--color-text-secondary)] mb-1">Processed video ready</p>
+            <p className="text-xs text-[var(--color-text-tertiary)]">
+              Click <strong>Save Video</strong> to download ({formatSize(result.video_size)})
+            </p>
+          </div>
 
           <div className="mb-4">
             <AdjustmentsPanel adjustments={result.adjustments} />

@@ -51,7 +51,7 @@ export default function AdjustmentsPanel({ adjustments }: Props) {
 
   const entries = Object.entries(adjustments)
     .filter(([key]) => key in ADJUST_KEY_MAP)
-    .filter(([_, v]) => Math.abs(v) > 1);
+    .filter((entry) => Math.abs(entry[1]) > 1);
 
   if (entries.length === 0) return null;
 

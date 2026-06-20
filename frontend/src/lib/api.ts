@@ -77,26 +77,60 @@ const API_BASE =
     ? "http://localhost:5000"
     : "";
 
-export async function analyzeVideo(file: File): Promise<AnalysisResult> {
-  const formData = new FormData();
-  formData.append("video", file);
+function isLocal(): boolean {
+  return typeof window !== "undefined" && window.location.hostname === "localhost";
+}
 
-  const response = await fetch(`${API_BASE}/api/analyze`, {
+async function uploadFileToBlob(file: File): Promise<string> {
+  const { uploadVideoToBlob } = await import("@/lib/blob-upload/upload");
+  const result = await uploadVideoToBlob(file);
+  return result.url;
+}
+
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    body: formData,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
-
   if (!response.ok) {
     const text = await response.text();
     try {
       const err = JSON.parse(text);
-      throw new Error(err.error || "Analysis failed");
+      throw new Error(err.error || "Request failed");
     } catch {
-      throw new Error(text || "Analysis failed");
+      throw new Error(text || "Request failed");
     }
   }
-
   return response.json();
+}
+
+async function apiUpload<T>(path: string, formData: FormData): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    try {
+      const err = JSON.parse(text);
+      throw new Error(err.error || "Request failed");
+    } catch {
+      throw new Error(text || "Request failed");
+    }
+  }
+  return response.json();
+}
+
+export async function analyzeVideo(file: File): Promise<AnalysisResult> {
+  if (!isLocal()) {
+    const blobUrl = await uploadFileToBlob(file);
+    return apiPost<AnalysisResult>("/api/analyze-blob", { blob_url: blobUrl });
+  }
+
+  const formData = new FormData();
+  formData.append("video", file);
+  return apiUpload<AnalysisResult>("/api/analyze", formData);
 }
 
 export async function analyzeVideoUrl(url: string): Promise<AnalysisResult> {
@@ -137,26 +171,21 @@ export interface CompareResult {
 }
 
 export async function compareVideos(original: File, edited: File): Promise<CompareResult> {
+  if (!isLocal()) {
+    const [origBlobUrl, editBlobUrl] = await Promise.all([
+      uploadFileToBlob(original),
+      uploadFileToBlob(edited),
+    ]);
+    return apiPost<CompareResult>("/api/compare-blob", {
+      original_blob_url: origBlobUrl,
+      edited_blob_url: editBlobUrl,
+    });
+  }
+
   const formData = new FormData();
   formData.append("original", original);
   formData.append("edited", edited);
-
-  const response = await fetch(`${API_BASE}/api/compare`, {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    try {
-      const err = JSON.parse(text);
-      throw new Error(err.error || "Comparison failed");
-    } catch {
-      throw new Error(text || "Comparison failed");
-    }
-  }
-
-  return response.json();
+  return apiUpload<CompareResult>("/api/compare", formData);
 }
 
 export function capitalize(str: string): string {
@@ -168,29 +197,26 @@ export interface ApplyEditsResult {
   adjustments: Adjustments;
   filters: Filter[];
   effects: Filter[];
-  video_data: string;
+  download_token?: string;
+  result_blob_url?: string;
+  video_size: number;
   video_mime: string;
 }
 
 export async function applyEdits(original: File, reference: File): Promise<ApplyEditsResult> {
+  if (!isLocal()) {
+    const [origBlobUrl, refBlobUrl] = await Promise.all([
+      uploadFileToBlob(original),
+      uploadFileToBlob(reference),
+    ]);
+    return apiPost<ApplyEditsResult>("/api/apply-edits-blob", {
+      original_blob_url: origBlobUrl,
+      reference_blob_url: refBlobUrl,
+    });
+  }
+
   const formData = new FormData();
   formData.append("original", original);
   formData.append("reference", reference);
-
-  const response = await fetch(`${API_BASE}/api/apply-edits`, {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    try {
-      const err = JSON.parse(text);
-      throw new Error(err.error || "Failed to apply edits");
-    } catch {
-      throw new Error(text || "Failed to apply edits");
-    }
-  }
-
-  return response.json();
+  return apiUpload<ApplyEditsResult>("/api/apply-edits", formData);
 }

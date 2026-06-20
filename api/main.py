@@ -1,13 +1,14 @@
 import os
 import uuid
+import time
 import requests
 import numpy as np
-import threading
 import concurrent.futures
 from urllib.parse import urlparse
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from blob_utils import download_from_blob, upload_to_blob
 
 app = Flask(__name__)
 CORS(app)
@@ -160,6 +161,7 @@ def analyze_video_url():
     if not video_url:
         return jsonify({"error": "Empty URL"}), 400
 
+    filepath = None
     try:
         ext = os.path.splitext(video_url.split('?')[0])[1].lower()
         is_direct_video = ext in ['.' + e for e in ALLOWED_EXTENSIONS]
@@ -222,7 +224,7 @@ def analyze_video_url():
         return _run_analysis(filepath)
 
     except Exception as e:
-        if os.path.exists(filepath):
+        if filepath and os.path.exists(filepath):
             os.remove(filepath)
         return jsonify({"error": str(e)}), 500
 
@@ -263,6 +265,8 @@ def compare_videos_endpoint():
             if p and os.path.exists(p):
                 os.remove(p)
 
+_download_store: dict = {}
+
 @app.route('/api/apply-edits', methods=['POST'])
 def apply_edits_endpoint():
     orig_path = ref_path = out_path = None
@@ -293,18 +297,169 @@ def apply_edits_endpoint():
         if not success:
             return jsonify({"error": "Failed to process video"}), 500
 
-        import base64
-        with open(out_path, 'rb') as f:
-            video_b64 = base64.b64encode(f.read()).decode('utf-8')
+        download_token = str(uuid.uuid4())
+        _download_store[download_token] = (out_path, time.time())
 
         return jsonify({
             "status": "success",
             "adjustments": adjustments,
             "filters": result.get("filters", []),
             "effects": result.get("effects", []),
-            "video_data": video_b64,
+            "download_token": download_token,
+            "video_size": os.path.getsize(out_path),
             "video_mime": "video/mp4",
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        for p in [orig_path, ref_path]:
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+@app.route('/api/download-video/<token>', methods=['GET'])
+def download_video(token):
+    entry = _download_store.get(token)
+    if not entry:
+        return jsonify({"error": "Video not found or expired"}), 404
+    path, _ = entry
+    if not os.path.exists(path):
+        _download_store.pop(token, None)
+        return jsonify({"error": "Video file no longer available"}), 404
+    try:
+        resp = send_file(path, mimetype='video/mp4', as_attachment=True, download_name='edited_video.mp4')
+        _download_store.pop(token, None)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok", "version": "1.0.0"})
+
+# ---------------------------------------------------------------------------
+# Blob-based endpoints (for Vercel deployment — bypasses 4.5 MB request limit)
+# ---------------------------------------------------------------------------
+
+@app.route('/api/analyze-blob', methods=['POST'])
+def analyze_video_blob():
+    data = request.get_json()
+    if not data or 'blob_url' not in data:
+        return jsonify({"error": "No blob_url provided"}), 400
+
+    blob_url = data['blob_url'].strip()
+    if not blob_url:
+        return jsonify({"error": "Empty blob_url"}), 400
+
+    filepath = None
+    try:
+        filepath = download_from_blob(blob_url, UPLOAD_FOLDER)
+        if not filepath:
+            return jsonify({"error": "Failed to download video from blob"}), 400
+
+        import cv2, base64
+        from detection_engine import DetectionEngine
+
+        engine = DetectionEngine(filepath, sample_interval=0.5, max_frames=300)
+        if not engine.extract_frames():
+            err_msg = getattr(engine, '_error', 'Could not extract frames from video')
+            os.remove(filepath)
+            return jsonify({"error": err_msg}), 400
+
+        analysis = engine.analyze()
+
+        frames_b64 = []
+        for ts, frame in engine.get_all_frames()[:60]:
+            _, buffer = cv2.imencode('.jpg', cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 60])
+            b64 = base64.b64encode(buffer).decode('utf-8')
+            frames_b64.append({
+                "time": round(ts, 2),
+                "data": f"data:image/jpeg;base64,{b64}",
+            })
+
+        os.remove(filepath)
+        return jsonify({"analysis": analysis, "frames": frames_b64, "status": "success"})
+
+    except Exception as e:
+        if filepath and os.path.exists(filepath):
+            os.remove(filepath)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/compare-blob', methods=['POST'])
+def compare_videos_blob():
+    data = request.get_json()
+    if not data or 'original_blob_url' not in data or 'edited_blob_url' not in data:
+        return jsonify({"error": "original_blob_url and edited_blob_url required"}), 400
+
+    orig_path = edit_path = None
+    try:
+        orig_path = download_from_blob(data['original_blob_url'].strip(), UPLOAD_FOLDER)
+        edit_path = download_from_blob(data['edited_blob_url'].strip(), UPLOAD_FOLDER)
+        if not orig_path or not edit_path:
+            return jsonify({"error": "Failed to download video(s) from blob"}), 400
+
+        from detection_engine import compare_videos
+        result = compare_videos(orig_path, edit_path)
+        result["status"] = "success"
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        for p in [orig_path, edit_path]:
+            if p and os.path.exists(p):
+                os.remove(p)
+
+
+@app.route('/api/apply-edits-blob', methods=['POST'])
+def apply_edits_blob():
+    data = request.get_json()
+    if not data or 'original_blob_url' not in data or 'reference_blob_url' not in data:
+        return jsonify({"error": "original_blob_url and reference_blob_url required"}), 400
+
+    orig_path = ref_path = out_path = None
+    try:
+        orig_path = download_from_blob(data['original_blob_url'].strip(), UPLOAD_FOLDER)
+        ref_path = download_from_blob(data['reference_blob_url'].strip(), UPLOAD_FOLDER)
+        if not orig_path or not ref_path:
+            return jsonify({"error": "Failed to download video(s) from blob"}), 400
+
+        uid = str(uuid.uuid4())
+        out_path = os.path.join(UPLOAD_FOLDER, f"{uid}_output.mp4")
+
+        from detection_engine import compare_videos
+        from edit_applier import apply_edits_to_video
+
+        result = compare_videos(orig_path, ref_path)
+        adjustments = result.get("adjustments", {})
+
+        success = apply_edits_to_video(orig_path, out_path, adjustments)
+        if not success:
+            return jsonify({"error": "Failed to process video"}), 500
+
+        # Upload result to Vercel Blob
+        result_blob_url = upload_to_blob(out_path)
+        if not result_blob_url:
+            return jsonify({"error": "Failed to upload result to blob storage"}), 500
+
+        return jsonify({
+            "status": "success",
+            "adjustments": adjustments,
+            "filters": result.get("filters", []),
+            "effects": result.get("effects", []),
+            "result_blob_url": result_blob_url,
+            "video_size": os.path.getsize(out_path),
+            "video_mime": "video/mp4",
+        })
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -315,9 +470,6 @@ def apply_edits_endpoint():
                 except Exception:
                     pass
 
-@app.route('/api/health', methods=['GET'])
-def health():
-    return jsonify({"status": "ok", "version": "1.0.0"})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

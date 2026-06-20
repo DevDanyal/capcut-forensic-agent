@@ -32,11 +32,6 @@ export default function CompareUpload({ onCompare }: Props) {
     }
   }
 
-  function readableSize(bytes: number) {
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
   return (
     <div className="flex-1 flex items-center justify-center px-4 py-12">
       <div className="w-full max-w-2xl">

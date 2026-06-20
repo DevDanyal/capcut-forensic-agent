@@ -16,13 +16,13 @@ def analyze_luminance_stats(frame: np.ndarray) -> Dict:
     hist = hist.astype(float) / hist.sum()
 
     cumsum = np.cumsum(hist)
-    p01 = float(np.searchsorted(cumsum, 0.01) / 255.0 * 100.0)
-    p10 = float(np.searchsorted(cumsum, 0.10) / 255.0 * 100.0)
-    p25 = float(np.searchsorted(cumsum, 0.25) / 255.0 * 100.0)
-    p50 = float(np.searchsorted(cumsum, 0.50) / 255.0 * 100.0)
-    p75 = float(np.searchsorted(cumsum, 0.75) / 255.0 * 100.0)
-    p90 = float(np.searchsorted(cumsum, 0.90) / 255.0 * 100.0)
-    p99 = float(np.searchsorted(cumsum, 0.99) / 255.0 * 100.0)
+    p01 = float(np.searchsorted(cumsum, 0.01))
+    p10 = float(np.searchsorted(cumsum, 0.10))
+    p25 = float(np.searchsorted(cumsum, 0.25))
+    p50 = float(np.searchsorted(cumsum, 0.50))
+    p75 = float(np.searchsorted(cumsum, 0.75))
+    p90 = float(np.searchsorted(cumsum, 0.90))
+    p99 = float(np.searchsorted(cumsum, 0.99))
     bottom_10pct_mean = float(np.mean(lum[lum <= np.percentile(lum, 10)])) if np.any(lum <= np.percentile(lum, 10)) else 0.0
     top_10pct_mean = float(np.mean(lum[lum >= np.percentile(lum, 90)])) if np.any(lum >= np.percentile(lum, 90)) else 255.0
 

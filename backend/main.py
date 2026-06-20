@@ -1,11 +1,11 @@
 import os
 import uuid
+import time
 import requests
 import numpy as np
-import threading
 import concurrent.futures
 from urllib.parse import urlparse
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
@@ -160,6 +160,7 @@ def analyze_video_url():
     if not video_url:
         return jsonify({"error": "Empty URL"}), 400
 
+    filepath = None
     try:
         ext = os.path.splitext(video_url.split('?')[0])[1].lower()
         is_direct_video = ext in ['.' + e for e in ALLOWED_EXTENSIONS]
@@ -222,7 +223,7 @@ def analyze_video_url():
         return _run_analysis(filepath)
 
     except Exception as e:
-        if os.path.exists(filepath):
+        if filepath and os.path.exists(filepath):
             os.remove(filepath)
         return jsonify({"error": str(e)}), 500
 
@@ -263,6 +264,19 @@ def compare_videos_endpoint():
             if p and os.path.exists(p):
                 os.remove(p)
 
+_download_store: dict = {}
+
+def _cleanup_downloads():
+    now = time.time()
+    expired = [k for k, (path, ts) in _download_store.items() if now - ts > 300]
+    for k in expired:
+        path, _ = _download_store.pop(k, (None, None))
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
 @app.route('/api/apply-edits', methods=['POST'])
 def apply_edits_endpoint():
     orig_path = ref_path = out_path = None
@@ -293,27 +307,44 @@ def apply_edits_endpoint():
         if not success:
             return jsonify({"error": "Failed to process video"}), 500
 
-        import base64
-        with open(out_path, 'rb') as f:
-            video_b64 = base64.b64encode(f.read()).decode('utf-8')
+        download_token = str(uuid.uuid4())
+        _download_store[download_token] = (out_path, time.time())
+        _cleanup_downloads()
 
         return jsonify({
             "status": "success",
             "adjustments": adjustments,
             "filters": result.get("filters", []),
             "effects": result.get("effects", []),
-            "video_data": video_b64,
+            "download_token": download_token,
+            "video_size": os.path.getsize(out_path),
             "video_mime": "video/mp4",
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
-        for p in [orig_path, ref_path, out_path]:
+        for p in [orig_path, ref_path]:
             if p and os.path.exists(p):
                 try:
                     os.remove(p)
                 except Exception:
                     pass
+
+@app.route('/api/download-video/<token>', methods=['GET'])
+def download_video(token):
+    entry = _download_store.get(token)
+    if not entry:
+        return jsonify({"error": "Video not found or expired"}), 404
+    path, _ = entry
+    if not os.path.exists(path):
+        _download_store.pop(token, None)
+        return jsonify({"error": "Video file no longer available"}), 404
+    try:
+        resp = send_file(path, mimetype='video/mp4', as_attachment=True, download_name='edited_video.mp4')
+        _download_store.pop(token, None)
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health():
